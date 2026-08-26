@@ -19,6 +19,10 @@ built and published differs.
   which no longer run on GitHub's current runner images, and have the release
   workflow attach assets to the GitHub Release instead of leaving them as
   workflow artifacts to be attached by hand.
+* Cut releases from a merge to `master` rather than a hand-pushed tag, matching
+  the `mf-storybook` / `rblx-studio-mcp` workflows: `version` in `Cargo.toml` is
+  the source of truth, and a push whose version already has a release is a
+  no-op. See "Releasing" in the README.
 
 ## 0.3.0 (2020-07-19)
 * **Breaking**: Reworked command line interface from the ground-up.

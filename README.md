@@ -27,6 +27,23 @@ cargo install --git https://github.com/studio-mayflower/run-in-roblox --locked
 
 (`cargo install run-in-roblox` installs upstream 0.3.0 from crates.io, which is the x86_64-only build this fork exists to replace.)
 
+## Releasing
+Releases are cut from a merge to `master`, with no manual tagging (the
+`mf-storybook` / `rblx-studio-mcp` pattern).
+
+The version's single source of truth is `version` in `Cargo.toml`. On every push
+to `master`, the workflow reads it and publishes `v<version>` unless that
+release already exists, so merges that don't touch the version are no-ops.
+
+To release, bump the version in a PR:
+
+```bash
+cargo set-version 0.3.2   # or edit Cargo.toml and run: cargo update -p run-in-roblox
+```
+
+Both `Cargo.toml` and `Cargo.lock` have to move together — the workflow fails
+early if they disagree, because `cargo build --locked` would fail anyway.
+
 ## Usage
 The recommended way to use `run-in-roblox` is with a place file and a script to run:
 

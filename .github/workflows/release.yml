@@ -1,11 +1,18 @@
 name: Release
 
+# master マージから人手なしで GitHub Release を出す (mf-storybook / rblx-studio-mcp 方式)。
+# バージョンの SSOT は Cargo.toml の version (Cargo.lock の同名エントリとも整合)。
+# その版のタグ (vX.Y.Z) の Release が既に存在すればスキップ (冪等)。
+# リリースしたいときは PR で Cargo.toml の version を上げるだけでよい。
+
 on:
   push:
-    tags: ["v*"]
-  # Lets the build matrix be smoke-tested without cutting a tag. No release is
-  # published on this path -- the artifacts are just left on the run.
+    branches: ["master"]
   workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -15,29 +22,42 @@ jobs:
     name: Resolve version
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      exists: ${{ steps.version.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read version from Cargo.toml
-        id: get
-        shell: bash
+      - name: Resolve version and check existing release
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          TAG="v${VERSION}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Cargo.toml version: $VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          # A tag that disagrees with Cargo.toml produces assets whose filenames
-          # lie about what is inside them, and Rokit resolves tools by tag -- so
-          # fail here rather than after four builds have already run.
-          if [ "${{ github.ref_type }}" = "tag" ] && [ "${{ github.ref_name }}" != "v$VERSION" ]; then
-            echo "::error::Tag ${{ github.ref_name }} does not match Cargo.toml version v$VERSION"
+          # `cargo build --locked` fails if the two disagree. Catching it here
+          # costs one job instead of four.
+          LOCK_VERSION="$(awk '/^name = "run-in-roblox"$/{getline; print}' Cargo.lock | cut -d'"' -f2)"
+          if [ "$LOCK_VERSION" != "$VERSION" ]; then
+            echo "::error::Cargo.lock has $LOCK_VERSION but Cargo.toml has $VERSION. Run 'cargo update -p run-in-roblox'."
             exit 1
+          fi
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Releasing $TAG"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
   build:
     name: Build ${{ matrix.label }}
     needs: [version]
+    if: needs.version.outputs.exists == 'false'
     runs-on: ${{ matrix.host }}
     strategy:
       fail-fast: false
@@ -48,7 +68,6 @@ jobs:
           - { host: windows-latest, target: x86_64-pc-windows-msvc,   label: windows-x86_64 }
           - { host: ubuntu-latest,  target: x86_64-unknown-linux-gnu, label: linux-x86_64 }
     env:
-      VERSION: ${{ needs.version.outputs.version }}
       ASSET: run-in-roblox-${{ needs.version.outputs.version }}-${{ matrix.label }}.zip
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +107,7 @@ jobs:
   release:
     name: Publish release
     needs: [version, build]
-    if: github.ref_type == 'tag'
+    if: needs.version.outputs.exists == 'false'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -96,15 +115,17 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The release is created only after all four builds have produced an
+      # archive, so a failed target leaves no half-published tag to clean up.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           ls -l dist
           gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
             --title "$TAG" \
             --generate-notes \
-            --verify-tag \
             dist/*.zip
