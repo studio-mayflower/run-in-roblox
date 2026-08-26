@@ -7,27 +7,36 @@ on:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
-
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.host }}
     strategy:
+      fail-fast: false
       matrix:
-        rust_version: [stable, "1.37.0"]
-
+        include:
+          - { host: macos-latest,   target: aarch64-apple-darwin,     label: macos-aarch64 }
+          - { host: macos-latest,   target: x86_64-apple-darwin,      label: macos-x86_64 }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc,   label: windows-x86_64 }
+          - { host: ubuntu-latest,  target: x86_64-unknown-linux-gnu, label: linux-x86_64 }
     steps:
-    - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
 
-    - name: Setup Rust toolchain
-      run: rustup default ${{ matrix.rust_version }}
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
 
-    - name: Build
-      run: cargo build --locked --verbose
+      # Mirrors release.yml: every target the release publishes is built here,
+      # so a target that stops compiling is caught on the PR and not on the tag.
+      - name: Build
+        run: cargo build --locked --verbose --target ${{ matrix.target }}
 
-    - name: Run tests
-      run: cargo test --locked --verbose
+      - name: Test
+        run: cargo test --locked --verbose --target ${{ matrix.target }}
 
-    - name: Rustfmt and Clippy
-      run: |
-        cargo fmt -- --check
-        cargo clippy
-      if: matrix.rust_version == 'stable'
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rustfmt and Clippy
+        run: |
+          cargo fmt -- --check
+          cargo clippy
