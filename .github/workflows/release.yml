@@ -2,65 +2,109 @@ name: Release
 
 on:
   push:
-    tags: ["*"]
+    tags: ["v*"]
+  # Lets the build matrix be smoke-tested without cutting a tag. No release is
+  # published on this path -- the artifacts are just left on the run.
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  windows:
-    runs-on: windows-latest
-
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
-
-    - name: Build release binary
-      run: cargo build --verbose --locked --release
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: run-in-roblox-win64
-        path: target/release/run-in-roblox.exe
-
-  macos:
-    runs-on: macos-latest
-
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
-
-    - name: Install Rust
-      run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-    - name: Build release binary
-      run: |
-        source $HOME/.cargo/env
-        cargo build --verbose --locked --release
-      env:
-        OPENSSL_STATIC: 1
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: run-in-roblox-macos
-        path: target/release/run-in-roblox
-
-  linux:
+  version:
+    name: Resolve version
     runs-on: ubuntu-latest
-
+    outputs:
+      version: ${{ steps.get.outputs.version }}
     steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
+      - uses: actions/checkout@v4
 
-    - name: Build
-      run: cargo build --locked --verbose --release
-      env:
-        OPENSSL_STATIC: 1
+      - name: Read version from Cargo.toml
+        id: get
+        shell: bash
+        run: |
+          VERSION="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Cargo.toml version: $VERSION"
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: run-in-roblox-linux
-        path: target/release/run-in-roblox
+          # A tag that disagrees with Cargo.toml produces assets whose filenames
+          # lie about what is inside them, and Rokit resolves tools by tag -- so
+          # fail here rather than after four builds have already run.
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "${{ github.ref_name }}" != "v$VERSION" ]; then
+            echo "::error::Tag ${{ github.ref_name }} does not match Cargo.toml version v$VERSION"
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: [version]
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { host: macos-latest,   target: aarch64-apple-darwin,     label: macos-aarch64 }
+          - { host: macos-latest,   target: x86_64-apple-darwin,      label: macos-x86_64 }
+          - { host: windows-latest, target: x86_64-pc-windows-msvc,   label: windows-x86_64 }
+          - { host: ubuntu-latest,  target: x86_64-unknown-linux-gnu, label: linux-x86_64 }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ASSET: run-in-roblox-${{ needs.version.outputs.version }}-${{ matrix.label }}.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      # Always build with an explicit --target so an asset's architecture is a
+      # property of the matrix rather than of whatever arch GitHub happens to
+      # give us. The upstream workflow built for the host arch, which is how a
+      # macOS asset stayed x86_64-only long after Apple Silicon shipped.
+      - name: Build
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          # -j: store the binary at the archive root. Rokit looks for an entry
+          # named exactly after the tool, so a nested path would not be found.
+          zip -j "dist/$ASSET" "target/${{ matrix.target }}/release/run-in-roblox"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "target/${{ matrix.target }}/release/run-in-roblox.exe" -DestinationPath "dist/$env:ASSET"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [version, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -l dist
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag \
+            dist/*.zip
