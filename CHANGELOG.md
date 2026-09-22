@@ -2,6 +2,24 @@
 
 ## Unreleased Changes
 
+## 0.4.1 (2026-09-22)
+0.4.0's hidden launch did not work, and left Studio behind. Both are fixed.
+
+* Actually hide Studio. `open -j` asks LaunchServices to start an app hidden,
+  and Studio ignores it, so 0.4.0 showed a window every run. The window is now
+  hidden after launch, the way Command-H does, through System Events. macOS asks
+  once for permission to control it (Privacy & Security -> Automation); decline
+  and the run still happens, with a window and a warning.
+* Stop leaking Studio processes. 0.4.0 found the process to kill by matching the
+  process name and gave up unless exactly one new match appeared -- and Studio
+  runs helpers under that name, so the common case was to kill nothing and leave
+  a Studio (and its window) behind on every run. The processes are now found by
+  their argv: the place lives in a temp directory unique to the run, so every
+  match is this run's and all of them are killed, while a Studio the user
+  already had open never matches.
+* `open -g` still keeps the launch from stealing focus, and `--show-window`
+  still opts out of all of it.
+
 ## 0.4.0 (2026-09-22)
 * Launch Roblox Studio hidden on macOS, so a test run no longer takes over the
   screen or steals focus. Pass `--show-window` for the old behaviour.

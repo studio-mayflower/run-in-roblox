@@ -28,11 +28,11 @@ struct Options {
     #[structopt(long("script"))]
     script_path: PathBuf,
 
-    /// Show the Roblox Studio window instead of launching it hidden.
+    /// Show the Roblox Studio window instead of hiding it.
     ///
-    /// Studio is launched hidden so that a run does not take over the screen.
-    /// Pass this to watch the run, or on a platform where a hidden launch is
-    /// not supported and the warning it logs is just noise.
+    /// Studio is launched without activating it and then hidden, so a run does
+    /// not take over the screen. Pass this to watch the run, or off macOS,
+    /// where hiding is not implemented and the warning it logs is just noise.
     #[structopt(long("show-window"))]
     show_window: bool,
 }
