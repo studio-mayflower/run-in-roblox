@@ -1,7 +1,7 @@
 # run-in-roblox
 A studio-mayflower fork of [rojo-rbx/run-in-roblox](https://github.com/rojo-rbx/run-in-roblox), which has been unmaintained since 2020.
 
-The source is unmodified. The fork exists to publish a **native Apple Silicon binary**: upstream's only macOS asset is x86_64, so it requires Rosetta 2 — which Apple cuts down to a gaming-only subset in macOS 28. See [CHANGELOG.md](CHANGELOG.md) for what changed.
+The fork exists to publish a **native Apple Silicon binary**: upstream's only macOS asset is x86_64, so it requires Rosetta 2 — which Apple cuts down to a gaming-only subset in macOS 28. It also launches Studio hidden on macOS, so a test run does not take over the screen. See [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 run-in-roblox is a tool to run a place, a model, or an individual script inside Roblox Studio.
 
@@ -54,6 +54,28 @@ run-in-roblox --place MyPlace.rbxlx --script starter-script.lua
 This will open `MyPlace.rbxlx` in Roblox Studio, run `starter-script.lua` until it completes, and then exit.
 
 `--place` is optional, but `--script` is required.
+
+### The Studio window
+
+On macOS, Studio is launched hidden and in the background, so a run does not take
+over the screen or steal focus. Pass `--show-window` to watch the run instead:
+
+```bash
+run-in-roblox --place MyPlace.rbxlx --script starter-script.lua --show-window
+```
+
+Two things to know about a hidden run:
+
+* It is macOS-only. Everywhere else Studio is launched as it always was, and
+  `--show-window` only saves you the warning that says so.
+* macOS App Nap throttles timers in a hidden app, so a long run can be slower
+  than the same run with a window. If that bites, turn App Nap off for Studio:
+
+  ```bash
+  defaults write com.Roblox.RobloxStudio NSAppSleepDisabled -bool YES
+  ```
+
+If a hidden launch fails, the run falls back to a normal one rather than failing.
 
 ## License
 run-in-roblox is available under the terms of the MIT License. See [LICENSE.txt](LICENSE.txt) or <https://opensource.org/licenses/MIT> for details.

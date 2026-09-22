@@ -2,6 +2,21 @@
 
 ## Unreleased Changes
 
+## 0.4.0 (2026-09-22)
+* Launch Roblox Studio hidden on macOS, so a test run no longer takes over the
+  screen or steals focus. Pass `--show-window` for the old behaviour.
+
+  A window belongs to the app, so a process we spawn ourselves cannot be told
+  to start without one -- only LaunchServices can. A hidden launch therefore
+  goes through `open -n -g -j`, and the place is passed with `--args` so Studio
+  sees the same argv it did before. `open` reports no pid, so the Studio to
+  close at the end of the run is found by diffing the running Studio processes
+  across the launch.
+
+  Nothing about this works off macOS, and a hidden launch that fails for any
+  reason falls back to a normal one: a run that takes over the screen is a much
+  smaller problem than a run that does not happen.
+
 ## 0.3.1 (2026-08-26)
 This is the first release of the studio-mayflower fork. The tool's behavior is
 unchanged from upstream 0.3.0 -- no source file was touched. Only the way it is
