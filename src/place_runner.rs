@@ -17,15 +17,19 @@ use crate::{
 
 /// A handle to the Roblox Studio we started, which force-kills it on drop.
 ///
-/// Studio is normally spawned directly and owned as a child process. A hidden
-/// launch has to go through macOS' `open`, which exits as soon as the app is
-/// launched and leaves us with nothing but a pid.
+/// Studio is normally spawned directly and owned as a child process, which is
+/// the only form that guarantees it can be killed. A background launch has to
+/// go through macOS' `open`, which exits as soon as the app is launched and
+/// leaves us with nothing but whatever pids we can find ourselves.
 // Only a macOS build takes the `open` path, so only it constructs the other two.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 enum StudioProcess {
     Owned(process::Child),
-    Pid(u32),
-    /// Studio was launched, but we could not work out which process it is.
+    /// Every process holding this run's place open. More than one is normal:
+    /// Studio runs helpers under the same name.
+    Pids(Vec<u32>),
+    /// Studio was launched, but we could not work out which process it is, so
+    /// there is nothing to kill.
     Unknown,
 }
 
@@ -35,13 +39,15 @@ impl Drop for StudioProcess {
             StudioProcess::Owned(child) => {
                 let _ignored = child.kill();
             }
-            StudioProcess::Pid(pid) => {
-                let _ignored = Command::new("kill")
-                    .arg("-9")
-                    .arg(pid.to_string())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+            StudioProcess::Pids(pids) => {
+                // SIGKILL, not SIGTERM: Studio does not quit on a polite signal
+                // when it was launched this way.
+                let mut kill = Command::new("kill");
+                kill.arg("-9");
+                for pid in pids.iter() {
+                    kill.arg(pid.to_string());
+                }
+                let _ignored = kill.stdout(Stdio::null()).stderr(Stdio::null()).status();
             }
             StudioProcess::Unknown => {}
         }
@@ -54,7 +60,7 @@ pub struct PlaceRunner {
     pub server_id: String,
     pub lua_script: String,
 
-    /// Launch Studio without showing its window.
+    /// Launch Studio without letting it take over the screen.
     pub hidden: bool,
 }
 
@@ -144,14 +150,21 @@ impl PlaceRunner {
         ))
     }
 
-    /// There is no way to hide the window of a process we spawn ourselves: the
-    /// window belongs to the app, and only LaunchServices can be asked to start
-    /// one hidden. `open -j` asks for exactly that, and `-g` keeps the app from
-    /// taking focus, so a hidden launch goes through `open` instead of exec'ing
-    /// the binary.
+    /// Studio ignores LaunchServices' "launch hidden" flag (`open -j`), so a
+    /// hidden run is two steps: `open -g` starts it without activating it, and
+    /// then System Events hides it the way Command-H does. The first use of
+    /// that prompts once for permission to control System Events (Privacy &
+    /// Security -> Automation); decline it and the run still happens, with a
+    /// window.
     ///
-    /// The place is passed with `--args` so that Studio sees the same argv it
-    /// does today, rather than being handed the file as a document to open.
+    /// `open` exits as soon as the app is launched and never reports a pid, so
+    /// the processes to hide and later kill are found by their argv: the place
+    /// is a file in a temp directory unique to this run, so anything holding it
+    /// open is ours, and a Studio the user already had open never matches. `-n`
+    /// makes it a new instance rather than a document opened in theirs.
+    ///
+    /// The place is passed with `--args` so Studio sees the same argv it does
+    /// on a direct spawn.
     #[cfg(target_os = "macos")]
     fn start_studio_hidden(
         &self,
@@ -161,12 +174,6 @@ impl PlaceRunner {
 
         let application_path = studio_install.application_path();
 
-        let process_name = application_path
-            .file_name()
-            .and_then(OsStr::to_str)
-            .ok_or_else(|| anyhow!("Roblox Studio's path had no file name"))?
-            .to_owned();
-
         // .../RobloxStudio.app/Contents/MacOS/RobloxStudio -> .../RobloxStudio.app
         let app_bundle = application_path
             .ancestors()
@@ -174,20 +181,15 @@ impl PlaceRunner {
             .ok_or_else(|| anyhow!("Roblox Studio's executable was not inside a .app bundle"))?
             .to_owned();
 
-        let before = studio_pids(&process_name)?;
+        let place_arg = format!("{}", self.place_path.display());
 
         let status = Command::new("open")
-            // A new instance, so that the pid below cannot be a Studio the user
-            // already had open, and so that an open Studio is left alone.
             .arg("-n")
-            // Do not bring it to the foreground.
             .arg("-g")
-            // Launch it hidden.
-            .arg("-j")
             .arg("-a")
             .arg(&app_bundle)
             .arg("--args")
-            .arg(format!("{}", self.place_path.display()))
+            .arg(&place_arg)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -197,7 +199,13 @@ impl PlaceRunner {
             bail!("`open` failed to launch Roblox Studio ({})", status);
         }
 
-        Ok(find_launched_studio(&process_name, &before))
+        let launched = find_launched_studio(&place_arg);
+
+        if let StudioProcess::Pids(pids) = &launched {
+            hide(pids);
+        }
+
+        Ok(launched)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -209,41 +217,24 @@ impl PlaceRunner {
     }
 }
 
-/// `open` reports no pid, so the Studio it launched is whichever Studio process
-/// is there now and was not there before.
+/// `open` reports no pid, so this run's Studio is whatever is holding this run's
+/// place file open. Every match is ours -- the path is in a temp directory made
+/// for this run -- so helper processes sharing the name are killed too rather
+/// than left behind, which is what matching on the process name got wrong.
 #[cfg(target_os = "macos")]
-fn find_launched_studio(
-    process_name: &str,
-    before: &std::collections::HashSet<u32>,
-) -> StudioProcess {
+fn find_launched_studio(place_arg: &str) -> StudioProcess {
     use std::time::Instant;
 
     let deadline = Instant::now() + Duration::from_secs(30);
 
     loop {
-        match studio_pids(process_name) {
-            Ok(now) => {
-                let launched: Vec<u32> = now.difference(before).copied().collect();
-
-                match launched.as_slice() {
-                    [pid] => return StudioProcess::Pid(*pid),
-                    [] => {}
-                    _ => {
-                        // Another Studio started at the same moment as ours, and
-                        // killing the wrong one would take down the user's editor.
-                        log::warn!(
-                            "More than one Roblox Studio started while this run was launching, \
-                             so this run's Studio cannot be told apart from the others and will \
-                             not be closed for you. Quit the hidden Studio by hand."
-                        );
-                        return StudioProcess::Unknown;
-                    }
-                }
-            }
+        match pids_holding(place_arg) {
+            Ok(pids) if !pids.is_empty() => return StudioProcess::Pids(pids),
+            Ok(_) => {}
             Err(err) => {
                 log::warn!(
-                    "Could not list Roblox Studio processes, so the Studio this run launched \
-                     will not be closed for you. Quit it by hand. ({:#})",
+                    "Could not list processes, so the Studio this run launched will not be \
+                     closed for you. Quit it by hand. ({:#})",
                     err
                 );
                 return StudioProcess::Unknown;
@@ -251,9 +242,11 @@ fn find_launched_studio(
         }
 
         if Instant::now() >= deadline {
-            log::warn!(
-                "Roblox Studio did not appear as a running process, so it will not be closed \
-                 for you. If a hidden Studio is running, quit it by hand."
+            log::error!(
+                "Roblox Studio never appeared as a process holding {}, so it will not be closed \
+                 for you and will keep running after this command exits. Quit it by hand, and \
+                 consider --show-window.",
+                place_arg
             );
             return StudioProcess::Unknown;
         }
@@ -263,16 +256,54 @@ fn find_launched_studio(
 }
 
 #[cfg(target_os = "macos")]
-fn studio_pids(process_name: &str) -> Result<std::collections::HashSet<u32>, anyhow::Error> {
+fn pids_holding(place_arg: &str) -> Result<Vec<u32>, anyhow::Error> {
     let output = Command::new("pgrep")
-        .arg("-x")
-        .arg(process_name)
+        .arg("-f")
+        .arg(place_arg)
         .output()
-        .context("Could not run `pgrep` to find Roblox Studio processes")?;
+        .context("Could not run `pgrep`")?;
 
     // pgrep exits with 1 when nothing matched, which is not an error here.
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| line.trim().parse().ok())
         .collect())
+}
+
+/// Hide the launched app, retrying while it finishes coming up: System Events
+/// has no process to hide until then. Only one of the pids is the app; the rest
+/// are helpers with no window, and asking about those simply fails.
+///
+/// A run is not worth failing over a window, so this only warns.
+#[cfg(target_os = "macos")]
+fn hide(pids: &[u32]) {
+    use std::time::Instant;
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        for pid in pids {
+            // A raw string: the script has its own quotes, and a Rust line
+            // continuation would eat the space in front of `(first`.
+            let script = format!(
+                r#"tell application "System Events" to set visible of (first application process whose unix id is {}) to false"#,
+                pid
+            );
+            let out = Command::new("osascript").arg("-e").arg(&script).output();
+            if matches!(out, Ok(ref o) if o.status.success()) {
+                return;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            log::warn!(
+                "Could not hide Roblox Studio, so this run has a window. macOS asks once for \
+                 permission to control System Events (Privacy & Security -> Automation); \
+                 without it there is no way to hide another app."
+            );
+            return;
+        }
+
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
