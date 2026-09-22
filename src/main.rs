@@ -27,6 +27,14 @@ struct Options {
     /// The script will be run at plugin-level security.
     #[structopt(long("script"))]
     script_path: PathBuf,
+
+    /// Show the Roblox Studio window instead of launching it hidden.
+    ///
+    /// Studio is launched hidden so that a run does not take over the screen.
+    /// Pass this to watch the run, or on a platform where a hidden launch is
+    /// not supported and the warning it logs is just noise.
+    #[structopt(long("show-window"))]
+    show_window: bool,
 }
 
 fn run(options: Options) -> Result<i32, anyhow::Error> {
@@ -67,6 +75,7 @@ fn run(options: Options) -> Result<i32, anyhow::Error> {
         place_path: temp_place_path.clone(),
         server_id: server_id.clone(),
         lua_script: script_contents.clone(),
+        hidden: !options.show_window,
     };
 
     let (sender, receiver) = mpsc::channel();
