@@ -2,6 +2,35 @@
 
 ## Unreleased Changes
 
+## 0.4.2 (2026-09-23)
+0.4.1's hidden launch still showed a window, and still left Studio behind. Both
+are fixed, this time against what Studio actually does.
+
+* Keep Studio hidden, instead of hiding it once. Studio un-hides itself when it
+  presents the place window, which happens after the launch-time hide -- and
+  after the plugin has reported in, so there was no message to hang a second
+  hide on either. A hidden run now re-hides on a timer for as long as it lasts
+  (four times a second for the first minute, then every two seconds), which
+  leaves the window on screen only for the moment between it being presented
+  and the next ask.
+* Do not exit before Studio has been killed. `PlaceRunner::run` owns the handle
+  whose drop kills Studio, and it runs on its own thread, while `main` called
+  `process::exit` as soon as the run reported its last message -- and
+  `process::exit` does not run other threads' destructors, so the kill was a
+  race the runner thread lost essentially every time. `main` now joins that
+  thread before exiting, and the run kills Studio before it removes the plugin
+  file rather than after.
+
+  The leftover Studio also outlived the temp directory holding the place it was
+  opening, which is why every run ended with a "We could not open the place
+  ... Cannot open place file for reading" dialog to dismiss.
+* A run that fails now reports the failure. The runner thread's error was
+  unwrapped into a panic message and the main thread reported "receiving on a
+  closed channel" instead; the error now comes back through the join.
+* Hiding tries every pid of a run rather than stopping at the first that
+  answers: Studio's helpers are application processes too, so one of them
+  answering counted as a success while the app kept its window.
+
 ## 0.4.1 (2026-09-22)
 0.4.0's hidden launch did not work, and left Studio behind. Both are fixed.
 
