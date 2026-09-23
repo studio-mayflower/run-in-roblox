@@ -4,7 +4,7 @@ mod plugin;
 
 use std::{path::PathBuf, process, sync::mpsc, thread};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use colored::Colorize;
 use fs_err as fs;
 use structopt::StructOpt;
@@ -80,15 +80,13 @@ fn run(options: Options) -> Result<i32, anyhow::Error> {
 
     let (sender, receiver) = mpsc::channel();
 
-    thread::spawn(move || {
-        place_runner.run(sender).unwrap();
-    });
+    let runner_thread = thread::spawn(move || place_runner.run(sender));
 
     let mut exit_code = 0;
 
-    while let Some(message) = receiver.recv()? {
-        match message {
-            RobloxMessage::Output { level, body } => {
+    loop {
+        match receiver.recv() {
+            Ok(Some(RobloxMessage::Output { level, body })) => {
                 let colored_body = match level {
                     OutputLevel::Print => body.normal(),
                     OutputLevel::Info => body.cyan(),
@@ -102,7 +100,23 @@ fn run(options: Options) -> Result<i32, anyhow::Error> {
                     exit_code = 1;
                 }
             }
+            Ok(None) => break,
+            // The sender is gone, so the run ended without saying so: it
+            // failed. Its error is the one worth reporting, and joining below
+            // is what produces it -- reporting the closed channel here would
+            // bury it.
+            Err(_) => break,
         }
+    }
+
+    // Wait for the run to finish before returning. `process::exit` does not run
+    // other threads' destructors, so returning while this one is still going
+    // skips the `StudioProcess` drop that kills Studio -- and `temp_place_folder`
+    // is deleted as this function returns, which leaves that orphaned Studio
+    // holding a place file that no longer exists and a modal error on screen.
+    match runner_thread.join() {
+        Ok(result) => result?,
+        Err(_) => bail!("The thread running Roblox Studio panicked"),
     }
 
     Ok(exit_code)

@@ -64,7 +64,7 @@ over the screen or steal focus. Pass `--show-window` to watch the run instead:
 run-in-roblox --place MyPlace.rbxlx --script starter-script.lua --show-window
 ```
 
-Three things to know about a hidden run:
+Four things to know about a hidden run:
 
 * It is macOS-only. Everywhere else Studio is launched as it always was, and
   `--show-window` only saves you the warning that says so.
@@ -73,6 +73,9 @@ Three things to know about a hidden run:
   macOS prompts the first time for permission to control it (Privacy & Security
   → Automation). Decline it and the run still happens — with a window, and a
   warning saying why.
+* **The window flashes once.** Studio un-hides itself when it presents the place
+  window, so a hidden run keeps asking for it to be hidden again rather than
+  asking once. The window is on screen for the moment between the two.
 * macOS App Nap throttles timers in a hidden app, so a long run can be slower
   than the same run with a window. If that bites, turn App Nap off for Studio:
 
