@@ -2,6 +2,18 @@
 
 ## Unreleased Changes
 
+## 0.4.3 (2026-09-24)
+No code changes -- 0.4.3 is 0.4.2 re-cut, and the version to pin.
+
+GitHub does not list 0.4.2's release assets reliably: the same release reports
+four assets or none depending on which replica answers, while every earlier
+release is consistent. A machine that draws an empty one gets
+`ERROR No compatible artifact found for studio-mayflower/run-in-roblox` from
+`rokit install`, which is what every CI run on the 0.4.2 pin hit. The archives
+themselves are fine -- they download and contain the right binary -- so a fresh
+release, indexed from scratch, is the fix. Editing the release to force a
+re-index was tried first and changed nothing.
+
 ## 0.4.2 (2026-09-23)
 0.4.1's hidden launch still showed a window, and still left Studio behind. Both
 are fixed, this time against what Studio actually does.
